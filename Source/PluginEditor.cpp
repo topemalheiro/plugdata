@@ -888,6 +888,11 @@ void PluginEditor::mouseDown(MouseEvent const& e)
 
 #else
         findParentComponentOfClass<DocumentWindow>()->maximiseButtonPressed();
+#    if JUCE_LINUX || JUCE_BSD
+        // The second click must not also start dragging the window: on Wayland the compositor would
+        // start moving the window while it is being maximised or restored, and it ends up displaced
+        return;
+#    endif
 #endif
     }
 
