@@ -232,9 +232,34 @@ public:
         object->updateIolets();
     }
 
+    // A note with a fixed width (resized by the user) that is centred or right-aligned lays out its text in the
+    // box's width, with an even border, so the text lines up with the box as it does in Pd. Other notes keep
+    // the usual left border and 6 px of slack on the right.
+    bool alignsInFixedWidth(bool const fixedWidth) const
+    {
+        return fixedWidth && getValue<int>(justification) != 1;
+    }
+
+    void updateEditorBorder(bool const fixedWidth)
+    {
+        auto const editorBorder = alignsInFixedWidth(fixedWidth) ? BorderSize<int>(1, 2, 1, 2) : border;
+        if (noteEditor.getBorder() != editorBorder)
+            noteEditor.setBorder(editorBorder);
+    }
+
+    int getEditorWidth(int const boxWidth, bool const fixedWidth) const
+    {
+        return alignsInFixedWidth(fixedWidth) ? boxWidth : boxWidth + 6;
+    }
+
     void resized() override
     {
-        noteEditor.setBounds(getLocalBounds().withTrimmedRight(-6));
+        bool fixedWidth = false;
+        if (auto note = ptr.get<t_fake_note>())
+            fixedWidth = note->x_resized;
+
+        updateEditorBorder(fixedWidth);
+        noteEditor.setBounds(getLocalBounds().withWidth(getEditorWidth(getWidth(), fixedWidth)));
     }
 
     void mouseEnter(MouseEvent const& e) override
@@ -259,10 +284,12 @@ public:
         return !noteEditor.isReadOnly();
     }
 
-    int getTextHeightForWidth(int const width)
+    int getTextHeightForWidth(int const width, bool const fixedWidth)
     {
+        // measured with the border and width the text will be shown with
+        updateEditorBorder(fixedWidth);
         auto const editorBounds = noteEditor.getBounds();
-        noteEditor.setBounds(editorBounds.getX(), editorBounds.getY(), width + 6, 1);
+        noteEditor.setBounds(editorBounds.getX(), editorBounds.getY(), getEditorWidth(width, fixedWidth), 1);
         auto const textHeight = noteEditor.getTextHeight();
         noteEditor.setBounds(editorBounds);
 
@@ -276,7 +303,7 @@ public:
         if (auto note = ptr.get<t_fake_note>()) {
             int const width = note->x_resized ? note->x_max_pixwidth : stringWidth;
 
-            return { note->x_obj.te_xpix, note->x_obj.te_ypix, width, getTextHeightForWidth(width) + 2 };
+            return { note->x_obj.te_xpix, note->x_obj.te_ypix, width, getTextHeightForWidth(width, note->x_resized) + 2 };
         }
 
         return { };
@@ -411,6 +438,7 @@ public:
                 noteEditor.setJustification(Justification::topRight);
             }
             updateFont();
+            resized(); // the text's width depends on the justification (see alignsInFixedWidth)
         } else if (v.refersToSameSourceAs(outline)) {
             if (auto note = ptr.get<t_fake_note>()) {
                 note->x_outline = getValue<int>(outline);
