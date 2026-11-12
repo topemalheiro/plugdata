@@ -39,6 +39,7 @@ struct OSUtils {
     static bool isWaylandWindow(juce::ComponentPeer* peer);
     static void maximiseLinuxWindow(juce::ComponentPeer* peer, bool shouldBeMaximised);
     static bool isLinuxWindowMaximised(juce::ComponentPeer* peer);
+    static bool isLinuxWindowMaximisedOrTiled(juce::ComponentPeer* peer);
     static void updateLinuxWindowConstraints(juce::ComponentPeer* peer);
 #elif JUCE_MAC
     static void setWindowMovable(juce::ComponentPeer* peer, bool canMove);
