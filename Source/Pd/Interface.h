@@ -733,7 +733,9 @@ struct Interface {
         canvas_dirty(cnv, 1);
     }
 
-    static void getCanvasContent(t_canvas* cnv, char** buf, int* bufsize)
+    // The canvas's content as Pd would save it. Needs Pd's lock, but turning the binbuf into text
+    // (binbuf_gettext) doesn't, so callers can do that after letting go. The caller frees the binbuf
+    static t_binbuf* getCanvasBinbuf(t_canvas* cnv)
     {
         t_binbuf* b = binbuf_new();
 
@@ -802,8 +804,7 @@ struct Interface {
                     static_cast<t_float>(cnv->gl_isgraph));
         }
 
-        binbuf_gettext(b, buf, bufsize);
-        binbuf_free(b);
+        return b;
     }
 
     static int numOutlets(t_object const* x)
