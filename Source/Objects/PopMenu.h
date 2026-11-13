@@ -209,7 +209,8 @@ public:
 
         nanovg::nvgDrawRoundedRect(nvg, b.getX(), b.getY(), b.getWidth(), b.getHeight(), bgCol, nvgColour(object->isSelected() ? colours.objectSelectedOutlineColour : colours.objectOutlineColour), getPlugDataLook(*this).getObjectCornerRadius());
 
-        auto textBounds = getLocalBounds().reduced(2).translated(2, 0);
+        // The text stops before the arrows, so a long item is shortened there instead of running under them
+        auto textBounds = getLocalBounds().reduced(2).translated(2, 0).withTrimmedRight(16);
         if (!textBounds.isEmpty()) {
             auto const text = currentItem >= 0 ? currentText : getValue<String>(labelNoSelection);
             auto const colour = Colour(fgCol.r, fgCol.g, fgCol.b, fgCol.a);
