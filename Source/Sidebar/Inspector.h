@@ -15,9 +15,9 @@ class Inspector final : public Component {
         {
         }
 
-        Value* addProperty(Value* controllerValue, SmallArray<Value*> const& attachedValues)
+        Value* addProperty(Value* controllerValue, SmallArray<Value*> const& attachedValues, bool const mixedShowsNothing = false)
         {
-            auto* property = properties.add(new Property(this, controllerValue, attachedValues));
+            auto* property = properties.add(new Property(this, controllerValue, attachedValues, mixedShowsNothing));
             return &property->baseValue;
         }
 
@@ -28,12 +28,24 @@ class Inspector final : public Component {
 
     private:
         struct Property {
-            Property(PropertyRedirector* parent, Value* controllerValue, SmallArray<Value*> const& attachedValues)
+            Property(PropertyRedirector* parent, Value* controllerValue, SmallArray<Value*> const& attachedValues, bool const mixedShowsNothing)
                 : redirector(parent)
                 , values(attachedValues)
             {
                 values.add(controllerValue);
-                baseValue.setValue(controllerValue->getValue());
+
+                // A choice the selected objects don't share shows as none: showing the first object's choice
+                // would make picking that choice for all of them do nothing
+                auto shown = controllerValue->getValue();
+                if (mixedShowsNothing) {
+                    for (auto const* value : values) {
+                        if (value->getValue() != shown) {
+                            shown = 0;
+                            break;
+                        }
+                    }
+                }
+                baseValue.setValue(shown);
                 baseValue.addListener(redirector);
             }
 
@@ -252,7 +264,7 @@ public:
                         newPanel->setPreferredHeight(32);
                         panels.add(newPanel);
                     } else {
-                        auto const* redirectedProperty = redirector.addProperty(value, otherValues);
+                        auto const* redirectedProperty = redirector.addProperty(value, otherValues, type == tCombo);
                         auto newPanel = createPanel(type, name, redirectedProperty, options, clip, min, max);
                         newPanel->setPreferredHeight(32);
                         panels.add(newPanel);
