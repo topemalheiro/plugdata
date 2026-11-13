@@ -489,13 +489,8 @@ Statusbar::Statusbar(PluginProcessor* processor, PluginEditor* e)
     detectiveSpeedSlider->getValueObject().referTo(SettingsFile::getInstance()->getPropertyAsValue("detective_speed"));
     detectiveSpeedSlider->setDoubleClickReturnValue(true, 1.0);
     detectiveSpeedSlider->setTooltip("Detective Mode speed");
-    addChildComponent(*detectiveSpeedSlider);
-
-    // The speed slider only shows while Detective Mode is on
-    detectiveModeButton->onStateChange = [this] {
-        detectiveSpeedSlider->setVisible(detectiveModeButton->getToggleState());
-    };
-    detectiveModeButton->onStateChange();
+    // Always shown and usable, so the speed can be set before turning Detective Mode on
+    addAndMakeVisible(*detectiveSpeedSlider);
 
     zoomSelector->setTooltip("Zoom level");
     zoomSelector->setMenuTooltip("Zoom options");
