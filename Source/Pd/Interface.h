@@ -733,7 +733,9 @@ struct Interface {
         canvas_dirty(cnv, 1);
     }
 
-    static void getCanvasContent(t_canvas* cnv, char** buf, int* bufsize)
+    // The canvas's content as Pd would save it. Needs Pd's lock, but turning the binbuf into text
+    // (binbuf_gettext) doesn't, so callers can do that after letting go. The caller frees the binbuf
+    static t_binbuf* getCanvasBinbuf(t_canvas* cnv)
     {
         t_binbuf* b = binbuf_new();
 
@@ -768,10 +770,13 @@ struct Interface {
         for (t_gobj* y = cnv->gl_list; y; y = y->g_next)
             gobj_save(y, b);
 
+        // Look the objects' indices up instead of counting them out for each connection
+        t_canvasindex index;
+        canvasindex_build(&index, cnv);
         linetraverser_start(&t, cnv);
         while ((oc = linetraverser_next_nosize(&t))) {
-            int const srcno = canvas_getindex(cnv, &t.tr_ob->ob_g);
-            int const sinkno = canvas_getindex(cnv, &t.tr_ob2->ob_g);
+            int const srcno = canvasindex_get(&index, &t.tr_ob->ob_g);
+            int const sinkno = canvasindex_get(&index, &t.tr_ob2->ob_g);
             if (t.outconnect_path_info == gensym("empty")) {
                 binbuf_addv(b, "ssiiii;", gensym("#X"), gensym("connect"),
                     srcno, t.tr_outno, sinkno, t.tr_inno);
@@ -780,6 +785,7 @@ struct Interface {
                     srcno, t.tr_outno, sinkno, t.tr_inno, t.outconnect_path_info);
             }
         }
+        canvasindex_free(&index);
         /* unless everything is the default (as in ordinary subpatches)
         print out a "coords" message to set up the coordinate systems */
         if (cnv->gl_isgraph || cnv->gl_x1 || cnv->gl_y1 || cnv->gl_x2 != 1.0f || cnv->gl_y2 != 1.0f || cnv->gl_pixwidth || cnv->gl_pixheight) {
@@ -802,8 +808,7 @@ struct Interface {
                     static_cast<t_float>(cnv->gl_isgraph));
         }
 
-        binbuf_gettext(b, buf, bufsize);
-        binbuf_free(b);
+        return b;
     }
 
     static int numOutlets(t_object const* x)

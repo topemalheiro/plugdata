@@ -708,14 +708,19 @@ void Patch::setCurrentFile(URL const& newURL)
 
 String Patch::getCanvasContent() const
 {
-    char* buf;
-    int bufsize;
-
+    // Hold Pd's lock (which the audio thread takes too) only while collecting the content,
+    // and make the text after letting go: for a big patch that's most of the time
+    t_binbuf* binbuf;
     if (auto patch = ptr.get<t_canvas>()) {
-        pd::Interface::getCanvasContent(patch.get(), &buf, &bufsize);
+        binbuf = pd::Interface::getCanvasBinbuf(patch.get());
     } else {
         return { };
     }
+
+    char* buf;
+    int bufsize;
+    binbuf_gettext(binbuf, &buf, &bufsize);
+    binbuf_free(binbuf);
 
     auto content = String::fromUTF8(buf, static_cast<size_t>(bufsize));
 

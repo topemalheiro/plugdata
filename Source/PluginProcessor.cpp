@@ -1255,18 +1255,30 @@ void PluginProcessor::getStateInformation(MemoryBlock& destData)
 {
     setThis();
 
+    // Don't hold Pd's lock while saving: the audio thread waits for it, and serialising every patch
+    // can take longer than an audio block. Copy the patch list under the lock, and let each patch
+    // take the lock only while it collects its content (see Patch::getCanvasContent)
+    SmallArray<pd::Patch::Ptr, 16> patchesToSave;
+    lockAudioThread();
+    for (auto const& patch : patches) {
+        // Only top-level patches: a subpatch or an abstraction that's open in a tab is saved with the
+        // patch it's in. Saved on its own as well, it came back as an extra top-level patch
+        if (auto const* cnv = patch->getRawPointer(); cnv && !cnv->gl_owner)
+            patchesToSave.add(patch);
+    }
+    unlockAudioThread();
+
     // Store pure-data and parameter state
     MemoryOutputStream ostream(destData, false);
 
-    ostream.writeInt(patches.size());
+    ostream.writeInt(patchesToSave.size());
 
     auto const patchesDir = ProjectInfo::appDataDir.getChildFile("Patches");
 
     auto const patchesTree = new XmlElement("Patches");
 
     // Save path and content for patch
-    lockAudioThread();
-    for (auto const& patch : patches) {
+    for (auto const& patch : patchesToSave) {
 
         auto content = patch->getCanvasContent();
         auto patchFile = patch->getCurrentFile().getFullPathName();
@@ -1288,7 +1300,6 @@ void PluginProcessor::getStateInformation(MemoryBlock& destData)
 
         patchesTree->addChildElement(patchTree);
     }
-    unlockAudioThread();
 
     ostream.writeInt(getLatencySamples() - Instance::getBlockSize());
     ostream.writeInt(oversampling);
