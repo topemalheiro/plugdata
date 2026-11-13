@@ -273,7 +273,9 @@ public:
         auto const b = getLocalBounds().toFloat();
 
         auto fillColour = getValue<bool>(transparent) ? nanovg::nvgRGBA(0, 0, 0, 0) : bgCol;
-        nanovg::nvgDrawRoundedRect(nvg, b.getX(), b.getY(), b.getWidth(), b.getHeight(), fillColour, object->isSelected() ? nvgColour(colours.objectSelectedOutlineColour) : nvgColour(colours.objectOutlineColour), getPlugDataLook(*this).getObjectCornerRadius());
+        // An oval button is round outside too, lit or not, as ELSE draws it in Pd
+        auto const boxRadius = getValue<bool>(oval) ? std::min(b.getWidth(), b.getHeight()) * 0.5f : getPlugDataLook(*this).getObjectCornerRadius();
+        nanovg::nvgDrawRoundedRect(nvg, b.getX(), b.getY(), b.getWidth(), b.getHeight(), fillColour, object->isSelected() ? nvgColour(colours.objectSelectedOutlineColour) : nvgColour(colours.objectOutlineColour), boxRadius);
 
         auto radius = getValue<bool>(oval) ? getWidth() : getPlugDataLook(*this).getObjectCornerRadius();
         if (!getValue<bool>(transparent)) {
