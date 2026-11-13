@@ -795,6 +795,7 @@ void Sidebar::showSidebar(bool const show)
     if (!hasAnyPanel())
         return;
 
+    bool const wasHidden = sidebarHidden;
     sidebarHidden = !show;
 
     SettingsFile::getInstance()->setProperty(side == Side::Right ? "right_sidebar_hidden" : "left_sidebar_hidden", !show);
@@ -818,7 +819,7 @@ void Sidebar::showSidebar(bool const show)
         setCachedComponentImage(nullptr);
     } else {
         setCachedComponentImage(nullptr);
-        int const newWidth = lastWidth;
+        int const newWidth = wasHidden ? lastWidth : getWidth();
         if (side == Side::Right)
             setBounds(getParentWidth() - newWidth, getY(), newWidth, getHeight());
         else
@@ -850,6 +851,9 @@ void Sidebar::forceShowParameters(SmallArray<Component*>& objects, SmallArray<Ob
         inspectorManuallyShown = true;
 
     showParameters(objects, params, true);
+
+    if (inspectorHasParameters && !isShowingInspector())
+        showPanel(InspectorPanel);
 }
 
 void Sidebar::showParameters(SmallArray<Component*>& objects, SmallArray<ObjectParameters, 6>& params, bool const showOnSelect)
