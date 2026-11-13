@@ -341,7 +341,6 @@ public:
         buttons = {
             new CalloutMenuButton(Icons::Edit, "Edit mode", false, locked ? getKeyboardShortcutsForCommand(CommandIDs::Lock) : ""),
             new CalloutMenuButton(Icons::Lock, "Run mode", false, locked ? "" : getKeyboardShortcutsForCommand(CommandIDs::Lock)),
-            new CalloutMenuButton(Icons::Presentation, "Presentation mode", true, getKeyboardShortcutsForCommand(CommandIDs::TogglePresentationMode)),
             new CalloutMenuButton(Icons::PluginMode, "Plugin mode", true, getKeyboardShortcutsForCommand(CommandIDs::TogglePluginMode))
         };
 
@@ -368,22 +367,15 @@ public:
             closeCalloutBox();
         };
         buttons[2]->onClick = [this, editor]() mutable {
-            if (auto* cnv = editor->getCurrentCanvas()) {
-                cnv->locked = true;
-                cnv->presentationMode = true;
-            }
-            updateModeIcon(2);
-            closeCalloutBox();
-        };
-        buttons[3]->onClick = [this, editor]() mutable {
             editor->getTabComponent().openInPluginMode(editor->getCurrentCanvas()->refCountedPatch);
             closeCalloutBox();
         };
 
+        // Same row height as upstream's four-item menu (130 / 4)
 #if JUCE_MAC
-        setSize(width + 52, 130);
+        setSize(width + 52, 98);
 #else
-        setSize(width + 46, 130);
+        setSize(width + 46, 98);
 #endif
     }
 
