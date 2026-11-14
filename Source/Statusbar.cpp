@@ -489,7 +489,7 @@ Statusbar::Statusbar(PluginProcessor* processor, PluginEditor* e)
     detectiveSpeedSlider->getValueObject().referTo(SettingsFile::getInstance()->getPropertyAsValue("detective_speed"));
     detectiveSpeedSlider->setDoubleClickReturnValue(true, 1.0);
     detectiveSpeedSlider->setTooltip("Detective Mode speed");
-    // Always shown and usable, so the speed can be set before turning Detective Mode on
+    // Usable whether Detective Mode is on or off, so the speed can be set before turning it on
     addAndMakeVisible(*detectiveSpeedSlider);
 
     zoomSelector->setTooltip("Zoom level");
@@ -570,11 +570,18 @@ void Statusbar::resized()
     overlayGroup->setBounds(b.removeFromLeft(34 + extraTouchWidth));
     b.removeFromLeft(spacing);
 
-    detectiveModeButton->setBounds(b.removeFromLeft(72 + extraTouchWidth));
-    detectiveSpeedSlider->setBounds(b.removeFromLeft(90));
-    b.removeFromLeft(spacing);
-
     editModeGroup->setBounds(b.removeFromRight(84));
+
+    // The Detective Mode controls only take room that's left over, so a narrow status bar keeps its mode button
+    int const detectiveButtonWidth = 72 + extraTouchWidth;
+    detectiveModeButton->setVisible(b.getWidth() >= detectiveButtonWidth);
+    if (detectiveModeButton->isVisible())
+        detectiveModeButton->setBounds(b.removeFromLeft(detectiveButtonWidth));
+
+    detectiveSpeedSlider->setVisible(detectiveModeButton->isVisible() && b.getWidth() >= 90 + spacing);
+    if (detectiveSpeedSlider->isVisible())
+        detectiveSpeedSlider->setBounds(b.removeFromLeft(90));
+    b.removeFromLeft(spacing);
 
     touchSelectionHelper->setBounds(b.withSizeKeepingCentre(touchSelectionHelper->getIdealWidth(), getHeight()));
 }
