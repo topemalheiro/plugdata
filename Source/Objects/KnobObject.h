@@ -42,6 +42,15 @@ class Knob final : public Component
     float interval = 0.0f;
 
 public:
+    // The look: the knob, or a tiny dial like Ableton Live's: a ring with its gap at the bottom right and a
+    // needle from the centre, without a value arc. Tiny (right) is its mirror image.
+    enum Style {
+        NormalKnob = 0,
+        TinyLeft,
+        TinyRight
+    };
+    int style = NormalKnob;
+
     std::function<void()> onDragStart, onDragEnd;
     std::function<void()> onValueChange;
 
@@ -265,6 +274,11 @@ public:
 
         startAngle = std::clamp<float>(startAngle, endAngle - MathConstants<float>::twoPi, endAngle + MathConstants<float>::twoPi);
 
+        if (style != NormalKnob) {
+            renderTiny(nvg, startAngle, endAngle, angle);
+            return;
+        }
+
         if (drawArc) {
             auto const arcBounds = bounds.reduced(lineThickness);
             auto const arcRadius = arcBounds.getWidth() * 0.5;
@@ -300,6 +314,47 @@ public:
         nanovg::nvgStroke(nvg);
 
         drawTicks(nvg, bounds, startAngle, endAngle, lineThickness);
+    }
+
+    // The tiny dial, measured from Live's: the ring's outer edge at 0.71 of the half-size and 0.18 of that thick,
+    // in the arc colour, cut where the needle crosses it; the needle as thick, from the centre to the ring's edge
+    void renderTiny(NVGcontext* nvg, float const startAngle, float const endAngle, float const angle) const
+    {
+        auto const centre = getLocalBounds().toFloat().getCentre();
+        auto const radius = std::min(getWidth(), getHeight()) * 0.5f * 0.71f;
+        auto const thickness = std::max(radius * 0.18f, 1.2f);
+        auto const ringRadius = radius - thickness * 0.5f;
+
+        if (drawArc) {
+            auto const gap = (thickness * 0.5f + std::max(thickness * 0.45f, 0.6f)) / ringRadius;
+            nanovg::nvgLineCap(nvg, NVG_BUTT);
+            nanovg::nvgStrokeWidth(nvg, thickness);
+            nanovg::nvgStrokeColor(nvg, nvgColour(arcColour));
+            auto const strokeArc = [nvg, centre, ringRadius](float const from, float const to) {
+                if (to - from <= 0.001f)
+                    return;
+                nanovg::nvgBeginPath(nvg);
+                nanovg::nvgArc(nvg, centre.x, centre.y, ringRadius, from, to, NVG_HOLE);
+                nanovg::nvgStroke(nvg);
+            };
+            strokeArc(startAngle, std::min(angle - gap, endAngle));
+            strokeArc(std::max(angle + gap, startAngle), endAngle);
+        }
+
+        auto const tip = centre + Point<float>(std::cos(angle), std::sin(angle)) * (radius - thickness * 0.5f);
+        nanovg::nvgBeginPath(nvg);
+        nanovg::nvgMoveTo(nvg, centre.x, centre.y);
+        nanovg::nvgLineTo(nvg, tip.x, tip.y);
+        nanovg::nvgLineCap(nvg, NVG_ROUND);
+        nanovg::nvgStrokeWidth(nvg, thickness);
+        nanovg::nvgStrokeColor(nvg, nvgColour(fgColour));
+        nanovg::nvgStroke(nvg);
+    }
+
+    void setStyle(int const newStyle)
+    {
+        style = std::clamp(newStyle, static_cast<int>(NormalKnob), static_cast<int>(TinyRight));
+        repaint();
     }
 
     void setFgColour(Colour const newFgColour)
@@ -407,6 +462,7 @@ class KnobObject final : public ObjectBase {
 
     Value sizeProperty = SynchronousValue();
     Value transparent = SynchronousValue();
+    Value style = SynchronousValue();
 
     NVGcolor bgCol;
 
@@ -475,6 +531,7 @@ public:
         objectParameters.addParamBool("Square", cAppearance, &square, { "No", "Yes" }, 1);
         objectParameters.addParamBool("Show arc", cAppearance, &showArc, { "No", "Yes" }, 1);
         objectParameters.addParamBool("Transparent", cAppearance, &transparent, { "No", "Yes" }, 0);
+        objectParameters.addParamCombo("Style", cAppearance, &style, { "Knob", "Tiny (left)", "Tiny (right)" }, 1);
     }
 
     void onConstrainerCreate() override
@@ -507,7 +564,7 @@ public:
 
     bool isTransparent() override
     {
-        return !::getValue<bool>(square);
+        return !::getValue<bool>(square) || knob.style != Knob::NormalKnob;
     }
 
     bool keyPressed(KeyPress const& key) override
@@ -584,6 +641,7 @@ public:
             primaryColour = colourToVar(getForegroundColour());
             secondaryColour = colourToVar(getBackgroundColour());
             transparent = knb->x_transparent;
+            style = knb->x_style + 1;
             arcColour = colourToVar(getArcColour());
             square = knb->x_square;
             sizeProperty = knb->x_size;
@@ -614,6 +672,7 @@ public:
 
         knob.setFgColour(getForegroundColour());
         knob.setArcColour(getArcColour());
+        knob.setStyle(::getValue<int>(style) - 1);
         updateRotaryParameters();
 
         updateArcStart();
@@ -884,6 +943,11 @@ public:
             }
             break;
         }
+        case hash("style"): {
+            if (atoms.size() > 0 && atoms[0].isFloat())
+                style = std::clamp<int>(atoms[0].getFloat(), 0, 2) + 1;
+            break;
+        }
         default:
             break;
         }
@@ -894,6 +958,12 @@ public:
         auto const& colours = getThemeColours();
 
         auto const b = getLocalBounds().toFloat();
+
+        // The tiny dial has no body, as in Live
+        if (knob.style != Knob::NormalKnob) {
+            knob.render(nvg);
+            return;
+        }
 
         auto const background = ::getValue<bool>(transparent) ? nanovg::nvgRGBA(0, 0, 0, 0) : bgCol;
         if (::getValue<bool>(square)) {
@@ -1159,6 +1229,11 @@ public:
             return;
         }
 
+        // The tiny dial turns its range 45 degrees: its middle points to the top left, or the top right when mirrored
+        auto const turn = knob.style == Knob::TinyLeft ? -MathConstants<float>::pi * 0.25f : knob.style == Knob::TinyRight ? MathConstants<float>::pi * 0.25f : 0.0f;
+        startRad += turn;
+        endRad += turn;
+
         knob.setRotaryParameters(startRad, endRad);
         knob.setNumberOfTicks(numTicks);
         knob.repaint();
@@ -1339,6 +1414,13 @@ public:
             if (auto knb = ptr.get<t_fake_knob>()) {
                 knb->x_transparent = ::getValue<bool>(transparent);
             }
+            repaint();
+        } else if (value.refersToSameSourceAs(style)) {
+            auto const newStyle = std::clamp(::getValue<int>(style), 1, 3) - 1;
+            if (auto knb = ptr.get<t_fake_knob>())
+                knb->x_style = newStyle;
+            knob.setStyle(newStyle);
+            updateRotaryParameters();
             repaint();
         }
     }

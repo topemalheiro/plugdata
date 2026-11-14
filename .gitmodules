@@ -18,6 +18,7 @@
 [submodule "Libraries/pd-else"]
 	path = Libraries/pd-else
 	url = https://github.com/topemalheiro/pd-else.git
+	branch = plugdata-rebased
 [submodule "Libraries/readerwriterqueue"]
 	path = Libraries/readerwriterqueue
 	url = https://github.com/cameron314/readerwriterqueue.git
