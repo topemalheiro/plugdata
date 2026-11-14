@@ -329,7 +329,7 @@ public:
             auto const gap = (thickness * 0.5f + std::max(thickness * 0.45f, 0.6f)) / ringRadius;
             nanovg::nvgLineCap(nvg, NVG_BUTT);
             nanovg::nvgStrokeWidth(nvg, thickness);
-            nanovg::nvgStrokeColor(nvg, nvgColour(arcColour));
+            nanovg::nvgStrokeColor(nvg, nvgColour(getShownArcColour()));
             auto const strokeArc = [nvg, centre, ringRadius](float const from, float const to) {
                 if (to - from <= 0.001f)
                     return;
@@ -347,7 +347,7 @@ public:
         nanovg::nvgLineTo(nvg, tip.x, tip.y);
         nanovg::nvgLineCap(nvg, NVG_ROUND);
         nanovg::nvgStrokeWidth(nvg, thickness);
-        nanovg::nvgStrokeColor(nvg, nvgColour(fgColour));
+        nanovg::nvgStrokeColor(nvg, nvgColour(getShownForeground()));
         nanovg::nvgStroke(nvg);
     }
 
