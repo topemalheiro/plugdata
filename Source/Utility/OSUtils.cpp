@@ -251,6 +251,7 @@ void OSUtils::updateLinuxWindowConstraints(juce::ComponentPeer* peer)
 
 bool OSUtils::isLinuxWindowViewable(juce::ComponentPeer* peer)
 {
+    // When X can't be asked (no window yet, Wayland, no connection), say it's viewable, so drawing goes on
     if (peer == nullptr || isWaylandWindow(peer))
         return true;
 
