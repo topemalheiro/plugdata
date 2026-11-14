@@ -16,6 +16,7 @@ class ButtonObject final : public ObjectBase {
     Value sizeProperty = SynchronousValue();
     Value readOnly = SynchronousValue();
     Value oval = SynchronousValue();
+    Value ovalOutline = SynchronousValue();
 
     NVGcolor fgCol;
     NVGcolor bgCol;
@@ -38,6 +39,7 @@ public:
         objectParameters.addParamColourBG(&secondaryColour);
         objectParameters.addParamBool("Transparent", cAppearance, &transparent, { "No", "Yes" });
         objectParameters.addParamBool("Oval", cAppearance, &oval, { "No", "Yes" });
+        objectParameters.addParamBool("Oval outline", cAppearance, &ovalOutline, { "No", "Yes" }, 1);
         objectParameters.addParamBool("Read Only", cGeneral, &readOnly, { "No", "Yes" });
 
         updateColours();
@@ -65,6 +67,7 @@ public:
             sizeProperty = VarArray(button->x_w, button->x_h);
             readOnly = button->x_readonly;
             oval = button->x_oval;
+            ovalOutline = button->x_oval_outline;
             if (button->x_mode == 0) {
                 mode = Latch;
             } else if (button->x_mode == 1) {
@@ -273,7 +276,10 @@ public:
         auto const b = getLocalBounds().toFloat();
 
         auto fillColour = getValue<bool>(transparent) ? nanovg::nvgRGBA(0, 0, 0, 0) : bgCol;
-        nanovg::nvgDrawRoundedRect(nvg, b.getX(), b.getY(), b.getWidth(), b.getHeight(), fillColour, object->isSelected() ? nvgColour(colours.objectSelectedOutlineColour) : nvgColour(colours.objectOutlineColour), getPlugDataLook(*this).getObjectCornerRadius());
+        // An oval button's outline is round too ("Oval outline", on by default, as ELSE draws it in Pd)
+        auto const roundOutline = getValue<bool>(oval) && getValue<bool>(ovalOutline);
+        auto const outlineRadius = roundOutline ? std::min(b.getWidth(), b.getHeight()) * 0.5f : getPlugDataLook(*this).getObjectCornerRadius();
+        nanovg::nvgDrawRoundedRect(nvg, b.getX(), b.getY(), b.getWidth(), b.getHeight(), fillColour, object->isSelected() ? nvgColour(colours.objectSelectedOutlineColour) : nvgColour(colours.objectOutlineColour), outlineRadius);
 
         auto radius = getValue<bool>(oval) ? getWidth() : getPlugDataLook(*this).getObjectCornerRadius();
         if (!getValue<bool>(transparent)) {
@@ -340,6 +346,12 @@ public:
             }
             repaint();
         }
+        if (value.refersToSameSourceAs(ovalOutline)) {
+            if (auto button = ptr.get<t_fake_button>()) {
+                button->x_oval_outline = getValue<bool>(ovalOutline);
+            }
+            repaint();
+        }
     }
 
     void receiveObjectMessage(hash32 const symbol, SmallArray<pd::Atom> const& atoms) override
@@ -375,6 +387,13 @@ public:
         case hash("oval"): {
             if (atoms.size() >= 1) {
                 setParameterExcludingListener(oval, atoms[0].getFloat());
+                repaint();
+            }
+            break;
+        }
+        case hash("ovaloutline"): {
+            if (atoms.size() >= 1) {
+                setParameterExcludingListener(ovalOutline, atoms[0].getFloat());
                 repaint();
             }
             break;
