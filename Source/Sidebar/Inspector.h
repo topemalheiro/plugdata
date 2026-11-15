@@ -8,88 +8,259 @@
 #include "Components/PropertiesPanel.h"
 
 class Inspector final : public Component {
-    class PropertyRedirector final : public Value::Listener {
+    // A property of several selected objects. It wraps the property's usual component: an edit made there is
+    // copied to every selected object. While the objects' values differ, the row says "(mixed)" instead, and the
+    // first edit reaches all of them, even if it's the value the first object already had.
+    class MixedPropertyComponent final : public PropertiesPanelProperty
+        , public Value::Listener
+        , public TextEditor::Listener
+        , public ComponentListener {
+
+        // What the wrapped component edits. A juce::Value drops a write of the value it already holds. While the
+        // objects differ, such a write is passed on if the user typed it: number and colour fields also write
+        // their unchanged value when they're only clicked and left again.
+        struct SharedValue final : public Value::ValueSource {
+            explicit SharedValue(var const& initialValue)
+                : value(initialValue)
+            {
+            }
+
+            var getValue() const override { return value; }
+
+            void setValue(var const& newValue) override
+            {
+                if (newValue == value && !passUnchanged)
+                    return;
+
+                value = newValue;
+                sendChangeMessage(false);
+            }
+
+            var value;
+            bool passUnchanged = false;
+        };
+
     public:
-        explicit PropertyRedirector(Inspector* parent)
-            : inspector(parent)
+        MixedPropertyComponent(Inspector& parent, ObjectParameter const& parameter, SmallArray<Value*> const& objectValues)
+            : PropertiesPanelProperty(parameter.name)
+            , inspector(parent)
+            , type(parameter.type)
+            , values(objectValues)
         {
+            auto shown = parameter.valuePtr->getValue();
+            for (auto const* value : values) {
+                if (value->getValue() != shown) {
+                    mixed = true;
+                    break;
+                }
+            }
+
+            // A choice or a font the objects don't share starts out as none, so that any pick is a change. Other
+            // properties keep the first object's value under "(mixed)", for a drag or an edit to start from.
+            if (mixed && type == tCombo)
+                shown = 0;
+            else if (mixed && type == tFont)
+                shown = String();
+
+            source = new SharedValue(shown);
+            sharedValue.referTo(Value(source));
+            sharedValue.addListener(this);
+
+            property.reset(inspector.createPanel(type, parameter.name, &sharedValue, parameter.options, parameter.clip, parameter.min, parameter.max));
+            addAndMakeVisible(property.get());
+            property->addMouseListener(this, true);
+            watchForTextEditors(*property);
+
+            update();
         }
 
-        Value* addProperty(Value* controllerValue, SmallArray<Value*> const& attachedValues)
+        ~MixedPropertyComponent() override
         {
-            auto* property = properties.add(new Property(this, controllerValue, attachedValues));
-            return &property->baseValue;
+            sharedValue.removeListener(this);
+            property.reset(); // now, while this still hears its children being deleted
         }
 
-        void clearProperties()
+        void paint(Graphics& g) override
         {
-            properties.clear();
+            if (!isShowingMixed())
+                return; // the wrapped component draws the whole row
+
+            PropertiesPanelProperty::paint(g);
+
+            g.setFont(Font(FontOptions(14.5f)));
+            g.setColour(getThemeColours(*this).panelTextColour.withAlpha(0.55f));
+            g.drawText("(mixed)", getLocalBounds().removeFromRight(getWidth() / 2).withTrimmedLeft(5), Justification::centredLeft);
+        }
+
+        void resized() override
+        {
+            property->setBounds(getLocalBounds());
+        }
+
+        void setRoundedCorners(bool const roundTop, bool const roundBottom) override
+        {
+            property->setRoundedCorners(roundTop, roundBottom);
         }
 
     private:
-        struct Property {
-            Property(PropertyRedirector* parent, Value* controllerValue, SmallArray<Value*> const& attachedValues)
-                : redirector(parent)
-                , values(attachedValues)
-            {
-                values.add(controllerValue);
-                baseValue.setValue(controllerValue->getValue());
-                baseValue.addListener(redirector);
-            }
+        // "(mixed)" stands in for the component until it's used: pressed, or its text edited
+        bool isShowingMixed() const
+        {
+            return mixed && !mouseIsDown && textEditor == nullptr && !toggleRevealed;
+        }
 
-            ~Property()
-            {
-                baseValue.removeListener(redirector);
-            }
+        void update()
+        {
+            source->passUnchanged = mixed && typed;
 
-            PropertyRedirector* redirector;
-            Value baseValue;
-            SmallArray<Value*> values;
-        };
+            // The hidden component still gets the mouse, so one press shows it and starts a drag or an edit.
+            // A toggle would act on that press without having been seen, so it's only shown by it.
+            if (type == tBool)
+                property->setVisible(!isShowingMixed());
+            else
+                property->setAlpha(isShowingMixed() ? 0.0f : 1.0f);
 
+            repaint();
+        }
+
+        // The wrapped component changed the shared value: copy it to every selected object
         void valueChanged(Value& v) override
         {
+            mixed = false;
+            update();
+
             pd::Patch* currentPatch = nullptr;
-            if (auto* editor = inspector->findParentComponentOfClass<PluginEditor>()) {
+            if (auto* editor = inspector.findParentComponentOfClass<PluginEditor>()) {
                 if (auto const* cnv = editor->getCurrentCanvas()) {
                     currentPatch = &cnv->patch;
                 }
             }
 
-            for (auto* property : properties) {
-                if (property->baseValue.refersToSameSourceAs(v)) {
-                    bool isInsideUndoSequence = false;
-                    if (currentPatch && !lastChangedValue.refersToSameSourceAs(v)) {
-                        currentPatch->startUndoSequence("properties");
-                        lastChangedValue.referTo(v);
-                        isInsideUndoSequence = true;
-                    }
+            bool isInsideUndoSequence = false;
+            if (currentPatch && !inspector.lastChangedValue.refersToSameSourceAs(v)) {
+                currentPatch->startUndoSequence("properties");
+                inspector.lastChangedValue.referTo(v);
+                isInsideUndoSequence = true;
+            }
 
-                    for (auto* value : property->values) {
-                        value->setValue(v.getValue());
-                    }
+            for (auto* value : values) {
+                value->setValue(v.getValue());
+            }
 
-                    if (isInsideUndoSequence && currentPatch) {
-                        currentPatch->endUndoSequence("properties");
-                    }
-                    break;
+            if (isInsideUndoSequence && currentPatch) {
+                currentPatch->endUndoSequence("properties");
+            }
+        }
+
+        // Mouse events of this row, and of the wrapped component and its children
+        void mouseDown(MouseEvent const& e) override
+        {
+            if (!mixed)
+                return;
+
+            if (e.eventComponent == this)
+                toggleRevealed = type == tBool;
+            else
+                mouseIsDown = true;
+
+            update();
+        }
+
+        void mouseUp(MouseEvent const& e) override
+        {
+            if (!mixed || e.eventComponent == this)
+                return;
+
+            mouseIsDown = false;
+
+            // A toggle only reports a click on its other side: while the objects differ, either side applies
+            if (type == tBool && isRealClickEvent(e)) {
+                source->passUnchanged = true;
+                sharedValue.setValue(sharedValue.getValue());
+            }
+
+            update();
+        }
+
+        void mouseExit(MouseEvent const& e) override
+        {
+            if (toggleRevealed && !e.source.isTouch() && !isMouseOver(true)) {
+                toggleRevealed = false;
+                update();
+            }
+        }
+
+        // Labels and number boxes add a TextEditor as a child while their text is being edited
+        void watchForTextEditors(Component& component)
+        {
+            component.addComponentListener(this);
+            for (auto* child : component.getChildren())
+                watchForTextEditors(*child);
+        }
+
+        void componentChildrenChanged(Component& component) override
+        {
+            for (auto* child : component.getChildren()) {
+                if (auto* editor = dynamic_cast<TextEditor*>(child); editor && editor != textEditor) {
+                    textEditor = editor;
+                    typed = false;
+                    editor->addListener(this);
+                    editor->addComponentListener(this);
+                    update();
                 }
             }
         }
 
-        Value lastChangedValue;
-        OwnedArray<Property> properties;
-        Inspector* inspector;
+        void textEditorTextChanged(TextEditor& editor) override
+        {
+            typed = true;
+            typedText = editor.getText();
+            update();
+        }
+
+        void componentBeingDeleted(Component& component) override
+        {
+            if (&component != textEditor)
+                return;
+
+            textEditor = nullptr;
+
+            // Once the component has dealt with the edit itself
+            MessageManager::callAsync([_this = SafePointer(this)] {
+                if (!_this)
+                    return;
+
+                // A text field only reports text that differs from before
+                if (_this->mixed && _this->typed && _this->type == tString)
+                    _this->sharedValue.setValue(_this->typedText);
+
+                _this->typed = false;
+                _this->update();
+            });
+        }
+
+        Inspector& inspector;
+        ParameterType const type;
+        SmallArray<Value*> values; // the property's value in each selected object
+        SharedValue* source;       // owned by sharedValue
+        Value sharedValue;
+        std::unique_ptr<PropertiesPanelProperty> property;
+
+        bool mixed = false;          // the objects' values differ, and nothing has been set yet
+        bool mouseIsDown = false;    // on the wrapped component
+        bool toggleRevealed = false; // a toggle, shown by a click on "(mixed)"
+        bool typed = false;          // into the open text editor
+        String typedText;
+        TextEditor* textEditor = nullptr;
     };
 
     PropertiesPanel panel;
     TextButton resetButton;
     SmallArray<ObjectParameters, 6> properties;
-    PropertyRedirector redirector;
+    Value lastChangedValue; // by a MixedPropertyComponent: a change of another one starts a new undo step
 
 public:
     Inspector()
-        : redirector(this)
     {
         panel.setTitleHeight(18);
         panel.setTitleAlignment(PropertiesPanel::AlignWithPropertyName);
@@ -190,7 +361,6 @@ public:
         properties = objectParameters;
 
         panel.clear();
-        redirector.clearProperties();
 
         if (objectParameters.empty()) {
             updateEmptyState();
@@ -252,8 +422,7 @@ public:
                         newPanel->setPreferredHeight(32);
                         panels.add(newPanel);
                     } else {
-                        auto const* redirectedProperty = redirector.addProperty(value, otherValues);
-                        auto newPanel = createPanel(type, name, redirectedProperty, options, clip, min, max);
+                        auto newPanel = new MixedPropertyComponent(*this, parameter, otherValues);
                         newPanel->setPreferredHeight(32);
                         panels.add(newPanel);
                     }
