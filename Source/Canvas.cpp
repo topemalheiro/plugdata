@@ -215,11 +215,17 @@ Canvas::Canvas(PluginEditor* parent, pd::Patch::Ptr p, Component* parentGraph)
     objectLayer.setInterceptsMouseClicks(false, true);
     connectionLayer.setInterceptsMouseClicks(false, true);
 
+    Rectangle<int> patchBounds;
     if (auto patchPtr = patch.getPointer()) {
+        patchBounds = patch.getBounds();
         isGraphChild = glist_isgraph(patchPtr.get());
         hideNameAndArgs = static_cast<bool>(patchPtr->gl_hidetext);
         xRange = VarArray { var(patchPtr->gl_x1), var(patchPtr->gl_x2) };
         yRange = VarArray { var(patchPtr->gl_y2), var(patchPtr->gl_y1) };
+
+        patchWidth = patchBounds.getWidth();
+        patchHeight = patchBounds.getHeight();
+        updateGraphBounds();
     }
 
     pd->registerMessageListener(patch.getUncheckedPointer(), this);
@@ -228,13 +234,10 @@ Canvas::Canvas(PluginEditor* parent, pd::Patch::Ptr p, Component* parentGraph)
     hideNameAndArgs.addListener(this);
     xRange.addListener(this);
     yRange.addListener(this);
-
-    auto const patchBounds = patch.getBounds();
-    patchWidth = patchBounds.getWidth();
-    patchHeight = patchBounds.getHeight();
-
     patchWidth.addListener(this);
     patchHeight.addListener(this);
+    graphSize.addListener(this);
+    graphPosition.addListener(this);
 
     globalMouseListener.globalMouseMove = [this](MouseEvent const& e) {
         lastMouseX = e.x;
@@ -344,6 +347,9 @@ Canvas::Canvas(PluginEditor* parent, pd::Patch::Ptr p, Component* parentGraph)
 
     parameters.addParamInt("Width", cDimensions, &patchWidth, 527, true, 0, 1 << 30, onInteractionFn);
     parameters.addParamInt("Height", cDimensions, &patchHeight, 327, true, 0, 1 << 30, onInteractionFn);
+
+    parameters.addParamRangeInt("Graph position", cGeneral, &graphPosition, { 0, 0 });
+    parameters.addParamRangeInt("Graph size", cGeneral, &graphSize, { 200, 140 });
 
     lookAndFeelChanged();
 }
@@ -1621,8 +1627,10 @@ void Canvas::deselectAll(bool const broadcastChange)
         selectedComponents.removeChangeListener(this);
 
     selectedComponents.deselectAll();
-    if (auto* s = editor->getSidebarForPanel(Sidebar::InspectorPanel))
-        s->hideParameters();
+    if (!isGraph) {
+        if (auto* s = editor->getSidebarForPanel(Sidebar::InspectorPanel))
+            s->hideParameters();
+    }
 
     if (!broadcastChange) {
         MessageManager::callAsync([_this = SafePointer(this)] {
@@ -2499,6 +2507,15 @@ void Canvas::redo()
     updateSidebarSelection();
 }
 
+
+void Canvas::updateGraphBounds()
+{
+    if (auto glist = patch.getPointer()) {
+        graphSize = VarArray { var(glist->gl_pixwidth), var(glist->gl_pixheight) };
+        graphPosition = VarArray { var(glist->gl_xmargin), var(glist->gl_ymargin) };
+    }
+}
+
 void Canvas::valueChanged(Value& v)
 {
     // Update zoom
@@ -2584,6 +2601,7 @@ void Canvas::valueChanged(Value& v)
 
         if (auto glist = patch.getPointer()) {
             canvas_setgraph(glist.get(), graphChild + 2 * (graphChild && glist->gl_hidetext), 0);
+            updateGraphBounds();
         }
 
         if (!graphChild) {
@@ -2599,6 +2617,7 @@ void Canvas::valueChanged(Value& v)
             graphArea.reset(nullptr);
         }
 
+        synchroniseAllCanvases();
         updateOverlays();
         repaint();
     } else if (v.refersToSameSourceAs(xRange)) {
@@ -2613,6 +2632,23 @@ void Canvas::valueChanged(Value& v)
             glist->gl_y1 = static_cast<float>(yRange.getValue().getArray()->getReference(1));
         }
         updateDrawables();
+    }
+    else if (v.refersToSameSourceAs(graphSize)) {
+        if (auto glist = patch.getPointer()) {
+            glist->gl_pixwidth = static_cast<float>(graphSize.getValue().getArray()->getReference(0));
+            glist->gl_pixheight = static_cast<float>(graphSize.getValue().getArray()->getReference(1));
+            if(graphArea) graphArea->updateBounds();
+            updateGraphBounds();
+            updateDrawables();
+        }
+    }
+    else if (v.refersToSameSourceAs(graphPosition)) {
+        if (auto glist = patch.getPointer()) {
+            glist->gl_xmargin = static_cast<float>(graphPosition.getValue().getArray()->getReference(0));
+            glist->gl_ymargin = static_cast<float>(graphPosition.getValue().getArray()->getReference(1));
+            if(graphArea) graphArea->updateBounds();
+            updateDrawables();
+        }
     }
 }
 
