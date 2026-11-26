@@ -281,6 +281,10 @@ void Dialogs::showMainMenu(PluginEditor* editor, Component* centre)
                     cnv->saveAs();
                 break;
             }
+            case MainMenu::MenuItem::ReloadFromDisk: {
+                editor->reloadPatchFromDisk(editor->getCurrentCanvas());
+                break;
+            }
             case MainMenu::MenuItem::Compile: {
                 Dialogs::showHeavyExportDialog(&editor->openedDialog, editor);
                 break;

@@ -161,6 +161,24 @@ public:
     pd::Patch::Ptr loadPatch(String patch);
     pd::Patch::Ptr loadPatch(URL const& patchURL);
 
+    // Reloads a top-level patch from its file, as it is on disk now: it comes back in its tab, with its view,
+    // its open subpatch tabs and its Detective Mode mutes (Utility/DetectiveMute.h), where the boxes they were
+    // on are still there. The patch closes now and opens again on the message thread, after Pd's closing of
+    // its windows; whenReloaded then gets the reloaded patch (nullptr if it couldn't be opened)
+    void reloadPatchFromDisk(pd::Patch* patch, std::function<void(pd::Patch::Ptr)> whenReloaded = nullptr);
+    // The standalone checks the files of its open patches twice a second, and reloads the ones another program
+    // (a text editor, a patch generator) changed, unless they have unsaved changes here
+    void checkPatchFilesOnDisk();
+    struct PatchFileCheck final : public Timer {
+        std::function<void()> check;
+        void timerCallback() override
+        {
+            if (check)
+                check();
+        }
+    };
+    PatchFileCheck patchFileCheck;
+
     void titleChanged() override;
 
     void setTheme(String themeToUse, bool force = false);

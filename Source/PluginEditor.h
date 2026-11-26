@@ -105,6 +105,13 @@ public:
     void settingsChanged(String const& name, var const& value) override;
 
     void updateCommandStatus();
+
+    // The top-level patch a canvas belongs to (a subpatch's tab belongs to its patch), if it was opened from a
+    // file that's still there
+    pd::Patch* getPatchWithFile(Canvas* cnv);
+    // Reloads that patch from its file (PluginProcessor::reloadPatchFromDisk), after asking if it has unsaved
+    // changes
+    void reloadPatchFromDisk(Canvas* cnv);
     void handleAsyncUpdate() override;
 
     void updateSelection(Canvas* cnv);

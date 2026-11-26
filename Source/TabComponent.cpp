@@ -178,6 +178,11 @@ public:
                 cnv->patch.getCurrentFile().revealToUser();
             });
 
+            // The patch as its file is on disk now (a subpatch's tab reloads its patch)
+            tabMenu.addItem("Reload from disk", parent->editor->getPatchWithFile(cnv) != nullptr, false, [this] {
+                parent->editor->reloadPatchFromDisk(cnv);
+            });
+
             tabMenu.addSeparator();
 
             PopupMenu parentPatchMenu;
@@ -420,6 +425,25 @@ void TabComponent::openPatch(const URL& path)
         for (auto* editor : pd->getEditors()) {
             for (auto* cnv : editor->getCanvases()) {
                 if (cnv->patch.getCurrentFile() == patchFile) {
+                    // Opened again after another program changed its file, and nothing here is unsaved: show
+                    // the file as it is now
+                    if (cnv->patch.closePatchOnDelete && !cnv->patch.isDirty() && cnv->patch.fileDiffersOnDisk()) {
+                        pd->reloadPatchFromDisk(&cnv->patch, [pd = pd](pd::Patch::Ptr const& reloaded) {
+                            if (!reloaded)
+                                return;
+                            for (auto* e : pd->getEditors()) {
+                                for (auto* c : e->getCanvases()) {
+                                    if (&c->patch == reloaded.get()) {
+                                        e->getTopLevelComponent()->toFront(true);
+                                        e->getTabComponent().showTab(c, c->patch.splitViewIndex);
+                                        e->getTabComponent().setActiveSplit(c);
+                                        return;
+                                    }
+                                }
+                            }
+                        });
+                        return;
+                    }
                     pd->logError("Patch is already open");
                     editor->getTopLevelComponent()->toFront(true);
                     editor->getTabComponent().showTab(cnv, cnv->patch.splitViewIndex);

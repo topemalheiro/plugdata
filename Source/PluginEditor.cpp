@@ -1217,6 +1217,43 @@ void PluginEditor::updateCommandStatus()
     AsyncUpdater::triggerAsyncUpdate();
 }
 
+pd::Patch* PluginEditor::getPatchWithFile(Canvas* cnv)
+{
+    if (!cnv)
+        return nullptr;
+
+    auto* root = cnv->patch.getRoot();
+    for (auto const& patch : pd->patches) {
+        if (patch->closePatchOnDelete && patch->getUncheckedPointer() == root)
+            return patch->getCurrentFile().existsAsFile() ? patch.get() : nullptr;
+    }
+    return nullptr;
+}
+
+void PluginEditor::reloadPatchFromDisk(Canvas* cnv)
+{
+    auto* patch = getPatchWithFile(cnv);
+    if (!patch) {
+        pd->logError("This patch has no file to reload it from");
+        return;
+    }
+    if (!patch->isDirty()) {
+        pd->reloadPatchFromDisk(patch);
+        return;
+    }
+
+    Dialogs::showMultiChoiceDialog(&openedDialog, this, "Discard the unsaved changes to " + patch->getTitle() + " and reload it from disk?", [this, file = patch->getCurrentFile()](int const choice) {
+            if (choice != 0)
+                return;
+            // Found again by its file: the patch may have changed meanwhile
+            for (auto const& p : pd->patches) {
+                if (p->closePatchOnDelete && p->getCurrentFile() == file) {
+                    pd->reloadPatchFromDisk(p.get());
+                    return;
+                }
+            } }, { "Reload", "Cancel" }, Icons::Warning);
+}
+
 ApplicationCommandTarget* PluginEditor::getNextCommandTarget()
 {
     return nullptr;
@@ -1560,6 +1597,11 @@ void PluginEditor::getCommandInfo(CommandID const commandID, ApplicationCommandI
         result.setInfo("Compile...", "Open Heavy export dialog", "General", 0);
         result.addDefaultKeypress(67, ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
         result.setActive(true);
+        break;
+    }
+    case CommandIDs::ReloadFromDisk: {
+        result.setInfo("Reload from disk", "Reload the patch from its file as it is on disk now", "General", 0);
+        result.setActive(hasCanvas);
         break;
     }
     default:
@@ -1954,6 +1996,10 @@ bool PluginEditor::perform(InvocationInfo const& info)
     }
     case CommandIDs::Compile: {
         Dialogs::showHeavyExportDialog(&openedDialog, this);
+        return true;
+    }
+    case CommandIDs::ReloadFromDisk: {
+        reloadPatchFromDisk(getCurrentCanvas());
         return true;
     }
     default: {

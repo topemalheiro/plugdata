@@ -149,6 +149,7 @@ void Patch::savePatch(URL const& locationURL)
         currentURL = url;
         instance->reloadAbstractions(location, patch.get());
     }
+    rememberFileState();
 }
 
 t_glist* Patch::getRoot() const
@@ -198,6 +199,7 @@ void Patch::savePatch()
 
         pd::Interface::saveToFile(patch.get(), file, dir);
     }
+    rememberFileState();
 
     MessageManager::callAsync([instance = juce::WeakReference(this->instance), file = this->currentFile, ptr = this->ptr] {
         if (instance) {
@@ -704,6 +706,53 @@ void Patch::setCurrentFile(URL const& newURL)
 {
     currentFile = newURL.getLocalFile();
     currentURL = newURL;
+    rememberFileState();
+}
+
+void Patch::rememberFileState()
+{
+    changingFileState = {};
+    if (!currentFile.existsAsFile()) {
+        knownFileState = {};
+        return;
+    }
+    knownFileState = { currentFile.getLastModificationTime(), currentFile.getSize(), currentFile.loadFileAsString().hashCode64() };
+}
+
+Patch::DiskState Patch::checkFileOnDisk()
+{
+    if (knownFileState.size < 0 || !currentFile.existsAsFile())
+        return DiskState::Unchanged;
+
+    auto const modified = currentFile.getLastModificationTime();
+    auto const size = currentFile.getSize();
+    if (modified == knownFileState.modified && size == knownFileState.size) {
+        changingFileState = {};
+        return DiskState::Unchanged;
+    }
+
+    // Wait until the file's date and size hold still for one check, so a file that's still being written
+    // isn't read half way
+    if (modified != changingFileState.modified || size != changingFileState.size) {
+        changingFileState = { modified, size, 0 };
+        return DiskState::Settling;
+    }
+    changingFileState = {};
+
+    if (currentFile.loadFileAsString().hashCode64() == knownFileState.hash) {
+        // Only its date changed (touched, or saved again unchanged)
+        knownFileState.modified = modified;
+        knownFileState.size = size;
+        return DiskState::Unchanged;
+    }
+    return DiskState::Changed;
+}
+
+bool Patch::fileDiffersOnDisk()
+{
+    if (knownFileState.size < 0 || !currentFile.existsAsFile())
+        return false;
+    return currentFile.loadFileAsString().hashCode64() != knownFileState.hash;
 }
 
 String Patch::getCanvasContent() const

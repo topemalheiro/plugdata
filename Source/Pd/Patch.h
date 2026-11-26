@@ -135,6 +135,23 @@ public:
     Point<float> lastViewportPosition = { 1, 1 };
     float lastViewportScale;
 
+    // Noticing that another program (a text editor, a patch generator) changed this patch's file on disk.
+    // The state of the file when plugdata last opened or saved it is remembered, and compared with the file
+    // as it is now
+    struct FileState {
+        Time modified;
+        int64 size = -1; // -1: no file (untitled, or never opened from one)
+        int64 hash = 0;  // of the file's text
+    };
+    enum class DiskState {
+        Unchanged,
+        Settling, // its date or size moved since the last check: still being written, perhaps
+        Changed   // it changed, and held still for one check
+    };
+    void rememberFileState();    // after opening or saving
+    DiskState checkFileOnDisk(); // for checks over time: reads the file only when its date or size moved
+    bool fileDiffersOnDisk();    // right now: reads it
+
     SmallString lastUndoSequence;
     SmallString lastRedoSequence;
 
@@ -148,6 +165,9 @@ private:
 
     File currentFile;
     URL currentURL; // We hold a URL to the patch as well, which is needed for file IO on iOS
+
+    FileState knownFileState;    // as plugdata last opened or saved it
+    FileState changingFileState; // as the last check saw it, while it differs from knownFileState
 
     WeakReference ptr;
 

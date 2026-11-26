@@ -51,6 +51,7 @@ public:
         addSeparator();
         addCustomItem(getMenuItemID(MenuItem::Save), std::unique_ptr<IconMenuItem>(menuItems[getMenuItemIndex(MenuItem::Save)]), nullptr, "Save patch");
         addCustomItem(getMenuItemID(MenuItem::SaveAs), std::unique_ptr<IconMenuItem>(menuItems[getMenuItemIndex(MenuItem::SaveAs)]), nullptr, "Save patch as");
+        addCustomItem(getMenuItemID(MenuItem::ReloadFromDisk), std::unique_ptr<IconMenuItem>(menuItems[getMenuItemIndex(MenuItem::ReloadFromDisk)]), nullptr, "Reload from disk");
 
         auto const plugdataState = new PopupMenu();
         plugdataState->addItem("Import workspace", [editor] {
@@ -107,6 +108,7 @@ public:
 
         menuItems[getMenuItemIndex(MenuItem::Save)]->isActive = hasCanvas;
         menuItems[getMenuItemIndex(MenuItem::SaveAs)]->isActive = hasCanvas;
+        menuItems[getMenuItemIndex(MenuItem::ReloadFromDisk)]->isActive = editor->getPatchWithFile(editor->getCurrentCanvas()) != nullptr;
     }
 
     class IconMenuItem final : public PopupMenu::CustomComponent {
@@ -274,7 +276,8 @@ public:
         FindExternals,
         Discover,
         Settings,
-        About
+        About,
+        ReloadFromDisk // shown after "Save patch as", listed last so the others keep their numbers
     };
 
     static int getMenuItemID(MenuItem const item)
@@ -290,7 +293,7 @@ public:
         return item - 1;
     }
 
-    StackArray<IconMenuItem*, 11> menuItems = {
+    StackArray<IconMenuItem*, 12> menuItems = {
         new IconMenuItem(Icons::New, "New patch", false, false),
         new IconMenuItem(Icons::Open, "Open patch...", false, false),
         new IconMenuItem(Icons::History, "Recently opened", true, false),
@@ -306,6 +309,8 @@ public:
         new IconMenuItem(Icons::Sparkle, "Discover...", false, false),
         new IconMenuItem(Icons::Settings, "Settings...", false, false),
         new IconMenuItem(Icons::Info, "About...", false, false),
+
+        new IconMenuItem(Icons::Refresh, "Reload from disk", false, false),
     };
     ThemeSelector themeSelector;
 };

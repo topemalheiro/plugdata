@@ -27,6 +27,9 @@
 #include "Utility/Presets.h"
 #include "Canvas.h"
 #include "DetectiveMode.h"
+#include "TabComponent.h"
+#include "Utility/DetectiveMute.h"
+#include "Pd/Interface.h"
 #include "PluginMode.h"
 #include "PluginEditor.h"
 #include "LookAndFeel.h"
@@ -174,6 +177,11 @@ PluginProcessor::PluginProcessor()
 
     if (ProjectInfo::isStandalone) {
         midiDeviceManager.setInternalSynthPort(settingsFile->getProperty<int>("internal_synth"));
+
+        // Reload the patches another program changes on disk. Only in the standalone: in a host, a patch
+        // changing under a plugin mid-session would surprise more than help, and "Reload from disk" is there
+        patchFileCheck.check = [this] { checkPatchFilesOnDisk(); };
+        patchFileCheck.startTimer(500);
     } else {
         midiDeviceManager.setInternalSynthPort(0);
     }
@@ -204,6 +212,8 @@ PluginProcessor::PluginProcessor()
 
 PluginProcessor::~PluginProcessor()
 {
+    patchFileCheck.stopTimer();
+
     // Stop tracing messages before the patches go
     detectiveMode.reset();
 
@@ -2370,6 +2380,386 @@ void PluginProcessor::reloadAbstractions(File const changedPatch, t_glist* excep
     }
 
     isPerformingGlobalSync = false;
+}
+
+// Reloading a patch from disk (reloadPatchFromDisk). A box is found again by its place in the patch (its
+// index in each canvas from the top-level one down) and its text, so the Detective Mode mutes and the
+// subpatch tabs come back only where the patch still has the same box. The functions that read the patch
+// expect the caller to hold Pd's lock
+namespace {
+
+using BoxPath = std::vector<int>;
+
+String getBoxText(t_gobj* box)
+{
+    auto* text = box ? pd_checkobject(&box->g_pd) : nullptr;
+    if (!text || !text->te_binbuf)
+        return {};
+
+    char* buffer = nullptr;
+    int length = 0;
+    binbuf_gettext(text->te_binbuf, &buffer, &length);
+    auto result = String::fromUTF8(buffer, length);
+    freebytes(buffer, length);
+    return result;
+}
+
+bool holdsCanvas(t_gobj* box)
+{
+    return box && pd_class(&box->g_pd) == canvas_class;
+}
+
+// The box at that place, and the canvas it sits in
+std::pair<t_canvas*, t_gobj*> findBox(t_canvas* root, BoxPath const& path)
+{
+    t_canvas* owner = root;
+    for (size_t level = 0; owner && level < path.size(); level++) {
+        t_gobj* box = nullptr;
+        int index = 0;
+        for (auto* y = owner->gl_list; y; y = y->g_next, index++) {
+            if (index == path[level]) {
+                box = y;
+                break;
+            }
+        }
+        if (!box)
+            return { nullptr, nullptr };
+        if (level + 1 == path.size())
+            return { owner, box };
+        owner = holdsCanvas(box) ? reinterpret_cast<t_canvas*>(box) : nullptr;
+    }
+    return { nullptr, nullptr };
+}
+
+// The place of a subpatch or abstraction canvas in its top-level patch
+bool findPath(t_canvas* canvas, t_canvas const* root, BoxPath& path)
+{
+    path.clear();
+    for (auto* c = canvas; c != root; c = c->gl_owner) {
+        auto* box = DetectiveMute::boxOf(c);
+        if (!box)
+            return false;
+        path.insert(path.begin(), glist_getindex(c->gl_owner, box));
+    }
+    return true;
+}
+
+struct MutedBox {
+    BoxPath path;
+    String text;
+    bool messages, inside;
+};
+
+void collectMutedBoxes(pd::Instance& instance, t_canvas* owner, BoxPath& path, std::vector<MutedBox>& found)
+{
+    int index = 0;
+    for (auto* y = owner->gl_list; y; y = y->g_next, index++) {
+        path.push_back(index);
+        auto const flags = instance.getDetectiveMute(y);
+        bool const messages = flags & pd::Instance::DetectiveMuteMessages;
+        bool const inside = flags & pd::Instance::DetectiveMuteInside;
+        if (messages || inside)
+            found.push_back({ path, getBoxText(y), messages, inside });
+        if (holdsCanvas(y))
+            collectMutedBoxes(instance, reinterpret_cast<t_canvas*>(y), path, found);
+        path.pop_back();
+    }
+}
+
+// What comes back once the patch is open again
+struct PatchReload {
+    URL url;
+    File file;
+    int patchIndex;
+    int splitViewIndex, windowIndex;
+    Point<float> lastViewportPosition;
+    float lastViewportScale;
+
+    // Its subpatch and abstraction tabs, with their view and place in the tab order
+    struct SubpatchTab {
+        BoxPath path;
+        String text;
+        int patchIndex;
+        int splitViewIndex, windowIndex;
+        Point<float> lastViewportPosition;
+        float lastViewportScale;
+        pd::Patch::Ptr reopened;
+    };
+    std::vector<SubpatchTab> subpatchTabs;
+
+    // The tabs that showed it or its subpatches in each window, and the one that had the focus
+    struct ShownTab {
+        Component::SafePointer<PluginEditor> editor;
+        bool isRoot;
+        BoxPath path;
+        int splitIndex;
+        bool active;
+    };
+    std::vector<ShownTab> shownTabs;
+
+    std::vector<MutedBox> mutedBoxes;
+    pd::Patch::Ptr newPatch;
+    std::function<void(pd::Patch::Ptr)> whenReloaded;
+};
+
+// Opens the patch again, with its Detective Mode mutes and its tabs (they're shown by showReloadedPatch)
+void openReloadedPatch(PluginProcessor& processor, PatchReload& reload)
+{
+    processor.setThis();
+    auto newPatch = processor.loadPatch(reload.url);
+    if (!newPatch) {
+        processor.logError("Couldn't reload " + reload.file.getFileName());
+        return;
+    }
+    reload.newPatch = newPatch;
+
+    newPatch->splitViewIndex = reload.splitViewIndex;
+    newPatch->windowIndex = reload.windowIndex;
+    newPatch->lastViewportPosition = reload.lastViewportPosition;
+    newPatch->lastViewportScale = reload.lastViewportScale;
+    auto& patches = processor.patches;
+    patches.move(patches.size() - 1, std::min(reload.patchIndex, static_cast<int>(patches.size()) - 1));
+
+    {
+        auto lock = newPatch->getPointer();
+        auto* newRoot = lock.get();
+        if (!newRoot)
+            return;
+
+        // The Detective Mode mutes, on the boxes that are still where they were, with the same text
+        for (auto const& muted : reload.mutedBoxes) {
+            auto [owner, box] = findBox(newRoot, muted.path);
+            ignoreUnused(owner);
+            if (!box || getBoxText(box) != muted.text)
+                continue;
+            processor.setDetectiveMute(box, pd::Instance::DetectiveMuteMessages, muted.messages);
+            processor.setDetectiveMute(box, pd::Instance::DetectiveMuteInside, muted.inside);
+        }
+
+        // The subpatch and abstraction tabs, the same way
+        for (auto& tab : reload.subpatchTabs) {
+            auto [owner, box] = findBox(newRoot, tab.path);
+            ignoreUnused(owner);
+            if (!holdsCanvas(box) || getBoxText(box) != tab.text)
+                continue;
+            pd::Patch::Ptr subpatch = new pd::Patch(pd::WeakReference(reinterpret_cast<t_canvas*>(box), &processor), &processor, false);
+            subpatch->splitViewIndex = tab.splitViewIndex;
+            subpatch->windowIndex = tab.windowIndex;
+            subpatch->lastViewportPosition = tab.lastViewportPosition;
+            subpatch->lastViewportScale = tab.lastViewportScale;
+            patches.add(subpatch);
+            patches.move(patches.size() - 1, std::min(tab.patchIndex, static_cast<int>(patches.size()) - 1));
+            tab.reopened = subpatch;
+        }
+    }
+
+    for (auto* editor : processor.getEditors())
+        editor->getTabComponent().updateNow();
+
+    // Pd thinks of them as open windows again. For a subpatch, Pd hands that to the message thread too
+    // (Instance's "canvas_vis"), which brings its tab to the front: showReloadedPatch runs after it
+    newPatch->setVisible(true);
+    for (auto const& tab : reload.subpatchTabs) {
+        if (tab.reopened)
+            tab.reopened->setVisible(true);
+    }
+}
+
+// Shows the reloaded patch's tabs where they were, and the one that had the focus
+void showReloadedPatch(PluginProcessor& processor, PatchReload& reload)
+{
+    auto const& newPatch = reload.newPatch;
+    if (newPatch) {
+        for (auto const& shown : reload.shownTabs) {
+            auto* editor = shown.editor.getComponent();
+            if (!editor)
+                continue;
+            for (auto* cnv : editor->getCanvases()) {
+                bool matches = false;
+                if (shown.isRoot) {
+                    matches = &cnv->patch == newPatch.get();
+                } else {
+                    auto* canvas = cnv->patch.getUncheckedPointer();
+                    BoxPath path;
+                    matches = canvas && canvas != newPatch->getUncheckedPointer() && canvas_getrootfor(canvas) == newPatch->getUncheckedPointer() && findPath(canvas, newPatch->getUncheckedPointer(), path) && path == shown.path;
+                }
+                if (matches) {
+                    editor->getTabComponent().showTab(cnv, shown.splitIndex);
+                    break;
+                }
+            }
+        }
+        // The focus last, so it ends where it was
+        for (auto const& shown : reload.shownTabs) {
+            auto* editor = shown.editor.getComponent();
+            if (!editor || !shown.active)
+                continue;
+            for (auto* cnv : editor->getCanvases()) {
+                auto* canvas = cnv->patch.getUncheckedPointer();
+                BoxPath path;
+                bool const matches = shown.isRoot ? &cnv->patch == newPatch.get()
+                                                  : canvas && canvas != newPatch->getUncheckedPointer() && canvas_getrootfor(canvas) == newPatch->getUncheckedPointer() && findPath(canvas, newPatch->getUncheckedPointer(), path) && path == shown.path;
+                if (matches) {
+                    editor->getTabComponent().setActiveSplit(cnv);
+                    break;
+                }
+            }
+        }
+
+        Canvas::updateDetectiveMuteEverywhere(&processor);
+        processor.logMessage("Reloaded " + reload.file.getFileName() + " from disk");
+    }
+
+    if (reload.whenReloaded)
+        reload.whenReloaded(newPatch);
+}
+
+}
+
+void PluginProcessor::reloadPatchFromDisk(pd::Patch* patchToReload, std::function<void(pd::Patch::Ptr)> whenReloaded)
+{
+    // The patch as this instance holds it
+    int patchIndex = -1;
+    for (int i = 0; i < patches.size(); i++) {
+        if (patches[i].get() == patchToReload)
+            patchIndex = i;
+    }
+    if (patchIndex < 0 || !patchToReload->closePatchOnDelete)
+        return;
+
+    auto oldPatch = patches[patchIndex];
+    auto const file = oldPatch->getCurrentFile();
+    if (!file.existsAsFile()) {
+        logError("Can't reload " + oldPatch->getTitle() + ": its file isn't there any more");
+        return;
+    }
+
+    // Only the list of patches and the tabs that show it may hold it: anything else (plugin mode) would keep
+    // it, and Pd's copy of it, alive next to the reloaded one
+    int tabsShowingIt = 0;
+    for (auto* editor : getEditors()) {
+        for (auto* cnv : editor->getCanvases())
+            tabsShowingIt += &cnv->patch == oldPatch.get();
+    }
+    if (oldPatch->openInPluginMode || oldPatch->getReferenceCount() > 2 + tabsShowingIt) {
+        logWarning("Can't reload " + oldPatch->getTitle() + " while it's open in plugin mode");
+        return;
+    }
+
+    setThis();
+    // Make sure that all messages are dequeued before objects get deleted
+    sendMessagesFromQueue();
+
+    auto* oldRoot = oldPatch->getUncheckedPointer();
+
+    // Every canvas's view, as its patch keeps it
+    for (auto* editor : getEditors()) {
+        for (auto* cnv : editor->getCanvases())
+            cnv->saveViewportState();
+    }
+
+    auto reload = std::make_shared<PatchReload>();
+    reload->url = oldPatch->getCurrentURL();
+    reload->file = file;
+    reload->patchIndex = patchIndex;
+    reload->splitViewIndex = oldPatch->splitViewIndex;
+    reload->windowIndex = oldPatch->windowIndex;
+    reload->lastViewportPosition = oldPatch->lastViewportPosition;
+    reload->lastViewportScale = oldPatch->lastViewportScale;
+    reload->whenReloaded = std::move(whenReloaded);
+
+    SmallArray<pd::Patch::Ptr> subpatchPatches;
+    {
+        auto lock = oldPatch->getPointer();
+        if (!lock)
+            return;
+
+        for (int i = 0; i < patches.size(); i++) {
+            auto const& p = patches[i];
+            if (p == oldPatch || p->closePatchOnDelete)
+                continue;
+            auto* canvas = p->getUncheckedPointer();
+            if (!canvas || canvas_getrootfor(canvas) != oldRoot)
+                continue;
+            BoxPath path;
+            if (findPath(canvas, oldRoot, path)) {
+                reload->subpatchTabs.push_back({ path, getBoxText(DetectiveMute::boxOf(canvas)), i, p->splitViewIndex, p->windowIndex, p->lastViewportPosition, p->lastViewportScale, nullptr });
+                subpatchPatches.add(p);
+            }
+        }
+
+        for (auto* editor : getEditors()) {
+            auto* current = editor->getCurrentCanvas();
+            for (auto* cnv : editor->getTabComponent().getVisibleCanvases()) {
+                auto* canvas = cnv->patch.getUncheckedPointer();
+                if (!canvas || canvas_getrootfor(canvas) != oldRoot)
+                    continue;
+                PatchReload::ShownTab shown { editor, canvas == oldRoot, {}, cnv->patch.splitViewIndex, cnv == current };
+                if (shown.isRoot || findPath(canvas, oldRoot, shown.path))
+                    reload->shownTabs.push_back(shown);
+            }
+        }
+
+        BoxPath path;
+        collectMutedBoxes(*this, oldRoot, path, reload->mutedBoxes);
+    }
+
+    // Close the patch, as closing its tabs would. Closing its tab can close its subpatches' tabs as well
+    // (their boxes go with it), hence the safe pointers
+    for (auto* editor : getEditors()) {
+        SmallArray<Component::SafePointer<Canvas>> toClose;
+        for (auto* cnv : editor->getCanvases()) {
+            if (&cnv->patch == oldPatch.get() || subpatchPatches.contains(cnv->refCountedPatch))
+                toClose.add(cnv);
+        }
+        for (auto& cnv : toClose) {
+            if (cnv)
+                editor->getTabComponent().closeTab(cnv, false);
+        }
+    }
+    // The messages Detective Mode still has point at its connections
+    if (detectiveMode)
+        detectiveMode->forgetMessages();
+
+    patches.remove_one(oldPatch);
+    for (auto const& p : subpatchPatches)
+        patches.remove_one(p);
+    subpatchPatches.clear();
+    oldPatch = nullptr; // the last reference: Pd closes the patch here
+
+    // Pd hands the closing of the patch's subpatch windows to the message thread (Instance's "canvas_vis"),
+    // which closes the tab of the canvas at that address. The reloaded canvases may get the same addresses,
+    // so the patch opens again only after that has run, and its tabs are shown after Pd's opening of them
+    MessageManager::callAsync([weakInstance = juce::WeakReference<pd::Instance>(this), reload] {
+        auto* processor = dynamic_cast<PluginProcessor*>(weakInstance.get());
+        if (!processor)
+            return;
+        openReloadedPatch(*processor, *reload);
+        MessageManager::callAsync([weakInstance, reload] {
+            if (auto* processor = dynamic_cast<PluginProcessor*>(weakInstance.get()))
+                showReloadedPatch(*processor, *reload);
+        });
+    });
+}
+
+void PluginProcessor::checkPatchFilesOnDisk()
+{
+    SmallArray<pd::Patch*> changed;
+    for (auto const& patch : patches) {
+        if (!patch->closePatchOnDelete) // a subpatch tab: reloaded with its patch
+            continue;
+        if (patch->checkFileOnDisk() != pd::Patch::DiskState::Changed)
+            continue;
+        if (patch->isDirty()) {
+            logWarning(patch->getTitle() + " changed on disk, but it has unsaved changes here, so it wasn't reloaded. \"Reload from disk\" reloads it and discards them");
+            patch->rememberFileState(); // warn once
+            continue;
+        }
+        changed.add(patch.get());
+    }
+
+    for (auto* patch : changed)
+        reloadPatchFromDisk(patch);
 }
 
 void PluginProcessor::titleChanged()

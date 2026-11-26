@@ -108,6 +108,7 @@ enum CommandIDs {
     TogglePresentationMode,
     TogglePluginMode,
     Compile,
+    ReloadFromDisk, // last, so that the saved shortcuts of the others keep their numbers
     NumItems // <-- the total number of items in this enum
 };
 
