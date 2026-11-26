@@ -58,6 +58,10 @@ public:
     // Pd only sends messages to plugdata while debugging is on: for the connection tooltips, and for Detective Mode
     static void updatePdDebugging();
 
+    // Forgets the messages waiting to be shown and the connections' history. For a patch that's reloaded: its
+    // new connections may get the addresses of the old ones
+    void forgetMessages();
+
 private:
     struct Bubble {
         Component::SafePointer<Canvas> canvas;

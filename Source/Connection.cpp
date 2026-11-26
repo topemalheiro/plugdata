@@ -25,6 +25,7 @@ using namespace juce::gl;
 #include "Pd/Patch.h"
 #include "Components/ConnectionMessageDisplay.h"
 #include "Sidebar/ConnectionDebugPanel.h"
+#include "DetectiveMode.h"
 
 Connection::Connection(Canvas* parent, Iolet* s, Iolet* e, t_outconnect* oc)
     : NVGComponent(this)
@@ -157,8 +158,16 @@ NVGcolor Connection::getConnectionColour() const
         } else {
             c = colours.dataColour;
         }
+    } else if (isDetectiveMuted() && cnv->pd->detectiveMode && cnv->pd->detectiveMode->isEnabled()) {
+        // While Detective Mode runs, the connections it skips are drawn faded
+        c = c.withMultipliedAlpha(0.35f);
     }
     return nvgColour(isHovering ? c.brighter() : c);
+}
+
+bool Connection::isDetectiveMuted() const
+{
+    return cnv->detectiveMutedInside || (outobj && outobj->detectiveMuted);
 }
 
 void Connection::render(NVGcontext* nvg)

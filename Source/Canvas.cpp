@@ -26,6 +26,7 @@
 #include "Components/CanvasBorderResizer.h"
 
 #include "Components/CanvasSearchHighlight.h"
+#include "Utility/DetectiveMute.h"
 
 extern "C" {
 void canvas_setgraph(t_glist* x, int flag, int nogoprect);
@@ -222,6 +223,7 @@ Canvas::Canvas(PluginEditor* parent, pd::Patch::Ptr p, Component* parentGraph)
         hideNameAndArgs = static_cast<bool>(patchPtr->gl_hidetext);
         xRange = VarArray { var(patchPtr->gl_x1), var(patchPtr->gl_x2) };
         yRange = VarArray { var(patchPtr->gl_y2), var(patchPtr->gl_y1) };
+        detectiveMutedInside = DetectiveMute::isInsideMuted(pd, patchPtr.get());
 
         patchWidth = patchBounds.getWidth();
         patchHeight = patchBounds.getHeight();
@@ -850,6 +852,11 @@ void Canvas::settingsChanged(String const& name, var const& value)
         updateOverlays();
         break;
     }
+    case hash("detective_mode"):
+        // The connections and boxes Detective Mode is muted for look different only while it runs
+        if (detectiveMutedInside || std::any_of(objects.begin(), objects.end(), [](Object* o) { return o->detectiveMuted || o->detectiveMutedInside; }))
+            repaint();
+        break;
     default:
         break;
     }
@@ -873,6 +880,30 @@ bool Canvas::shouldShowConnectionDirection() const
 bool Canvas::shouldShowConnectionActivity() const
 {
     return showConnectionActivity;
+}
+
+void Canvas::updateDetectiveMute()
+{
+    bool muted = false;
+    if (auto patchPtr = patch.getPointer())
+        muted = DetectiveMute::isInsideMuted(pd, patchPtr.get());
+
+    if (muted != detectiveMutedInside) {
+        detectiveMutedInside = muted;
+        repaint(); // its connections dim or brighten while Detective Mode runs
+    }
+}
+
+void Canvas::updateDetectiveMuteEverywhere(PluginProcessor* pd)
+{
+    for (auto* editor : pd->getEditors()) {
+        for (auto* cnv : editor->getCanvases()) {
+            cnv->updateDetectiveMute();
+            for (auto* object : cnv->objects)
+                object->updateDetectiveMute();
+            cnv->repaint();
+        }
+    }
 }
 
 int Canvas::getOverlays() const

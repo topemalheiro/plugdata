@@ -192,7 +192,9 @@ void DetectiveMode::collectMessages()
 {
     traceCollector->dequeue([this](pd::ConnectionTraceEvent const& event) {
         // Messages in patches that aren't open can't be shown or selected
-        if (!getOpenConnections().contains(event.connection))
+        auto const& connections = getOpenConnections();
+        auto const open = connections.find(event.connection);
+        if (open == connections.end())
             return;
 
         Message message;
@@ -207,9 +209,24 @@ void DetectiveMode::collectMessages()
         if (connectionHistory.size() > maxHistory)
             connectionHistory.pop_front();
 
+        // A connection Detective Mode is muted for (Utility/DetectiveMute.h) keeps its messages for its tooltip,
+        // but isn't shown and doesn't wait its turn
+        if (open->second.not_empty() && open->second.front().second->isDetectiveMuted())
+            return;
+
         if (pending.size() < maxPendingMessages)
             pending.push_back({ event.connection, std::move(message) });
     });
+}
+
+void DetectiveMode::forgetMessages()
+{
+    if (traceCollector)
+        traceCollector->dequeue([](pd::ConnectionTraceEvent const&) { });
+    pending.clear();
+    history.clear();
+    stopMessage();
+    openConnectionsAreCurrent = false;
 }
 
 bool DetectiveMode::startNextMessage()
@@ -223,10 +240,11 @@ bool DetectiveMode::startNextMessage()
         if (it == connections.end())
             continue;
 
-        // Only show it where it can be seen: not in a tab in the background, or in presentation mode
+        // Only show it where it can be seen: not in a tab in the background, or in presentation mode. Nor once
+        // Detective Mode was muted for its connection while it waited
         SmallArray<Bubble, 2> newBubbles;
         for (auto const& [cnv, connection] : it->second) {
-            if (connection->isShowing()) {
+            if (connection->isShowing() && !connection->isDetectiveMuted()) {
                 Bubble bubble;
                 bubble.canvas = cnv;
                 bubble.connection = connection;

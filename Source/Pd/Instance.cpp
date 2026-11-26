@@ -1010,7 +1010,26 @@ void Instance::clearWeakReferences(void* ptr)
         *ref = false;
     }
     pdWeakReferences.erase(ptr);
+    // Pd frees every object through here: a box made later at the same address mustn't find its mutes
+    detectiveMutes.erase(ptr);
     weakReferenceLock.exit();
+}
+
+uint8_t Instance::getDetectiveMute(void const* box) const
+{
+    ScopedLock const lock(weakReferenceLock);
+    auto const it = detectiveMutes.find(box);
+    return it != detectiveMutes.end() ? it->second : 0;
+}
+
+void Instance::setDetectiveMute(void* box, uint8_t const flag, bool const muted)
+{
+    ScopedLock const lock(weakReferenceLock);
+    auto const flags = static_cast<uint8_t>(muted ? getDetectiveMute(box) | flag : getDetectiveMute(box) & ~flag);
+    if (flags)
+        detectiveMutes[box] = flags;
+    else
+        detectiveMutes.erase(box);
 }
 
 void Instance::enqueueFunctionAsync(std::function<void()> const& fn)

@@ -141,6 +141,12 @@ public:
 
     ObjectActivityPolicy objectActivityPolicy : 2 = ObjectActivityPolicy::Self;
 
+    // Detective Mode is muted for the messages this object sends, or for every connection inside it (a
+    // subpatch or abstraction), see Utility/DetectiveMute.h. Copied here so that it's cheap to check
+    bool detectiveMuted = false;
+    bool detectiveMutedInside = false;
+    void updateDetectiveMute();
+
 private:
     void initialise();
 

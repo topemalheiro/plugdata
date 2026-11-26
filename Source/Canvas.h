@@ -107,6 +107,13 @@ public:
     bool shouldShowConnectionDirection() const;
     bool shouldShowConnectionActivity() const;
 
+    // Detective Mode is muted for every connection in this canvas: its own box, or the box of a canvas it sits
+    // in, has "everything inside" muted (Utility/DetectiveMute.h). Copied here so that it's cheap to check
+    bool detectiveMutedInside = false;
+    void updateDetectiveMute();
+    // Re-reads the muted state of every open canvas and box, after a change from the menu or a reload
+    static void updateDetectiveMuteEverywhere(PluginProcessor* pd);
+
     void save(std::function<void()> const& nestedCallback = [] { });
     void saveAs(std::function<void()> const& nestedCallback = [] { });
 

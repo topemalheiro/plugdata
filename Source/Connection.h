@@ -112,6 +112,10 @@ public:
 
     StringArray getMessageFormated() const;
 
+    // Detective Mode leaves this connection out: it sits in a muted subpatch, or its sending object is muted
+    // (Utility/DetectiveMute.h)
+    bool isDetectiveMuted() const;
+
 private:
     enum SegmentDirection { ZeroLength,
         Horizontal,

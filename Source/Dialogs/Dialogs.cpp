@@ -38,6 +38,7 @@
 #include "MainMenu.h"
 #include "AddObjectMenu.h"
 #include "Canvas.h"
+#include "Utility/DetectiveMute.h"
 #include "Connection.h"
 #include "Deken.h"
 #include "Standalone/PlugDataWindow.h"
@@ -706,6 +707,71 @@ void Dialogs::showCanvasRightClickMenu(Canvas* cnv, Component* originalComponent
     addCommandItem(popupMenu, CommandIDs::Encapsulate);
     addCommandItem(popupMenu, CommandIDs::Triggerize);
     popupMenu.addSeparator();
+
+    // Leave some boxes, or everything inside a subpatch, out of Detective Mode (Utility/DetectiveMute.h)
+    {
+        PopupMenu detectiveMenu;
+        auto* pd = cnv->pd;
+
+        // Messages the right-clicked or selected boxes send (not the ones inside a graph-on-parent box)
+        SmallArray<Component::SafePointer<Object>> boxes;
+        bool allMuted = true;
+        for (auto* o : selectedObjects) {
+            if (o && o->gui && o->cnv == cnv) {
+                boxes.add(o);
+                allMuted = allMuted && o->detectiveMuted;
+            }
+        }
+        allMuted = allMuted && boxes.not_empty();
+
+        detectiveMenu.addItem(boxes.size() > 1 ? "Mute messages from these objects" : "Mute messages from this object", boxes.not_empty(), allMuted, [pd, boxes, allMuted] {
+            for (auto const& o : boxes) {
+                if (o)
+                    pd->setDetectiveMute(o->getPointer(), pd::Instance::DetectiveMuteMessages, !allMuted);
+            }
+            Canvas::updateDetectiveMuteEverywhere(pd);
+        });
+
+        // Everything inside a subpatch or abstraction box
+        bool boxHoldsCanvas = false;
+        if (!multiple && object && object->gui && object->cnv == cnv) {
+            if (auto gobj = object->gui->ptr.get<t_gobj>())
+                boxHoldsCanvas = pd_class(&gobj->g_pd) == canvas_class;
+        }
+        if (boxHoldsCanvas) {
+            bool const insideMuted = object->detectiveMutedInside;
+            detectiveMenu.addItem("Mute everything inside", true, insideMuted, [pd, object, insideMuted] {
+                if (!object)
+                    return;
+                pd->setDetectiveMute(object->getPointer(), pd::Instance::DetectiveMuteInside, !insideMuted);
+                Canvas::updateDetectiveMuteEverywhere(pd);
+            });
+        }
+
+        // Right-clicked on the canvas of a subpatch or abstraction: the same setting, kept for its box
+        if (originalComponent == cnv) {
+            t_gobj* ownBox = nullptr;
+            if (auto patchPtr = cnv->patch.getPointer())
+                ownBox = DetectiveMute::boxOf(patchPtr.get());
+            if (ownBox) {
+                bool const ownMuted = pd->getDetectiveMute(ownBox) & pd::Instance::DetectiveMuteInside;
+                detectiveMenu.addItem("Mute this subpatch", true, ownMuted, [cnv = Component::SafePointer(cnv), pd, ownMuted] {
+                    if (!cnv)
+                        return;
+                    if (auto patchPtr = cnv->patch.getPointer()) {
+                        if (auto* box = DetectiveMute::boxOf(patchPtr.get()))
+                            pd->setDetectiveMute(box, pd::Instance::DetectiveMuteInside, !ownMuted);
+                    }
+                    Canvas::updateDetectiveMuteEverywhere(pd);
+                });
+                if (!ownMuted && cnv->detectiveMutedInside)
+                    detectiveMenu.addItem("Muted with the subpatch it sits in", false, true, [] { });
+            }
+        }
+
+        popupMenu.addSubMenu("Detective", detectiveMenu);
+        popupMenu.addSeparator();
+    }
 
     PopupMenu orderMenu;
     orderMenu.addItem(ToFront, "To Front", object != nullptr && !locked);

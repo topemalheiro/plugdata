@@ -28,6 +28,7 @@
 #include "Heavy/CompatibleObjects.h"
 
 #include "Pd/Patch.h"
+#include "DetectiveMode.h"
 
 extern "C" {
 #include <m_pd.h>
@@ -414,6 +415,8 @@ void Object::setType(String const& newType, pd::WeakReference existingObject)
             isHvccCompatible = true;
     }
 
+    updateDetectiveMute();
+
     // Update inlets/outlets
     updateIolets();
     updateBounds();
@@ -485,6 +488,19 @@ SmallString Object::getType(bool const withOriginPrefix) const
         return gui->getType();
 
     return SmallString();
+}
+
+void Object::updateDetectiveMute()
+{
+    auto const flags = cnv->pd->getDetectiveMute(getPointer());
+    bool const muted = flags & pd::Instance::DetectiveMuteMessages;
+    bool const mutedInside = flags & pd::Instance::DetectiveMuteInside;
+
+    if (muted != detectiveMuted || mutedInside != detectiveMutedInside) {
+        detectiveMuted = muted;
+        detectiveMutedInside = mutedInside;
+        repaint();
+    }
 }
 
 void Object::triggerOverlayActiveState()
@@ -1266,6 +1282,32 @@ void Object::performRender(NVGcontext* nvg)
         nanovg::nvgDrawRoundedRect(nvg, indexBounds.getX(), indexBounds.getY(), indexBounds.getWidth(), indexBounds.getHeight(), fillColour, fillColour, 2.0f);
 
         Fonts::drawText(cnv->editor->getNanoLLGC(), text, indexBounds.toFloat(), Fonts::getDefaultFont().withHeight(8.0f), colours.objectSelectedOutlineColour.contrasting(), Justification::centred);
+    }
+
+    // While Detective Mode runs, a box it skips says so (its own messages, or everything inside it) with a
+    // small "off" sign, a slashed circle on its right edge, where no iolets are. The index overlay uses that
+    // edge too, so then the sign goes on the left one. Not in presentation or plugin mode, which show no
+    // connections
+    if ((detectiveMuted || detectiveMutedInside) && !cnv->isGraph && !getValue<bool>(cnv->presentationMode) && !editor->pluginMode && cnv->pd->detectiveMode && cnv->pd->detectiveMode->isEnabled()) {
+        constexpr float radius = 4.5f;
+        auto const onLeft = (isHvccCompatible || editor->pluginMode) && cnv->shouldShowIndex();
+        auto const cx = static_cast<float>(onLeft ? b.getX() : b.getRight());
+        auto const cy = static_cast<float>(b.getCentreY());
+
+        NVGScopedState scopedState(nvg);
+        nanovg::nvgBeginPath(nvg);
+        nanovg::nvgCircle(nvg, cx, cy, radius);
+        nanovg::nvgFillColor(nvg, nvgColour(colours.canvasBackgroundColour));
+        nanovg::nvgFill(nvg);
+        nanovg::nvgStrokeColor(nvg, nvgColour(colours.objectOutlineColour));
+        nanovg::nvgStrokeWidth(nvg, 1.2f);
+        nanovg::nvgStroke(nvg);
+
+        constexpr float d = radius * 0.7071f;
+        nanovg::nvgBeginPath(nvg);
+        nanovg::nvgMoveTo(nvg, cx - d, cy + d);
+        nanovg::nvgLineTo(nvg, cx + d, cy - d);
+        nanovg::nvgStroke(nvg);
     }
 
     renderIolets(nvg);

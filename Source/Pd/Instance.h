@@ -221,6 +221,15 @@ public:
     void unregisterWeakReference(void* ptr, pd_weak_reference const* ref);
     void clearWeakReferences(void* ptr);
 
+    // Detective Mode can be muted for the messages a box sends, or for every connection inside a subpatch or
+    // abstraction box (Utility/DetectiveMute.h). It's kept here for as long as the box exists, not in the patch
+    enum DetectiveMuteFlags : uint8_t {
+        DetectiveMuteMessages = 1,
+        DetectiveMuteInside = 2
+    };
+    uint8_t getDetectiveMute(void const* box) const;
+    void setDetectiveMute(void* box, uint8_t flag, bool muted);
+
     virtual void updateConsole(SmallString const& message, bool isWarning, int numMessages, bool newWarning) = 0;
 
     virtual void titleChanged() = 0;
@@ -326,6 +335,7 @@ public:
 
 private:
     UnorderedMap<void*, SmallArray<pd_weak_reference*>> pdWeakReferences;
+    UnorderedMap<void const*, uint8_t> detectiveMutes; // by box, guarded by weakReferenceLock
 
     moodycamel::ConcurrentQueue<std::function<void()>> functionQueue = moodycamel::ConcurrentQueue<std::function<void()>>(4096);
     moodycamel::ConcurrentQueue<Message> guiMessageQueue = moodycamel::ConcurrentQueue<Message>(64);
